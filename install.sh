@@ -195,7 +195,7 @@ main() {
     # Check deps
     if ! check_deps; then
         echo
-        read -r -p "Install build dependencies now? [y/N] " ans
+        read -r -p "Install build dependencies now? [y/N] " ans < /dev/tty
         case "$ans" in
             [yY]|[yY][eE][sS])
                 install_deps || die "Dependency install failed"

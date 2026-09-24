@@ -24,7 +24,7 @@ rm -f "${XDG_RUNTIME_DIR:-/tmp}/pomodoro.sock" \
       "${XDG_RUNTIME_DIR:-/tmp}/pomodoro_state.txt"
 
 echo
-read -r -p "Also remove config and session logs? [y/N] " ans
+read -r -p "Also remove config and session logs? [y/N] " ans < /dev/tty
 case "$ans" in
     [yY]|[yY][eE][sS])
         rm -rf "$HOME/.config/pomodoro" "$HOME/.local/share/pomodoro"
