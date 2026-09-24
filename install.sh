@@ -216,7 +216,7 @@ main() {
         info "Downloading source from GitHub..."
         local tmpdir
         tmpdir="$(mktemp -d)"
-        trap 'rm -rf "$tmpdir"' EXIT
+        trap "rm -rf '$tmpdir'" EXIT
 
         if command -v curl >/dev/null 2>&1; then
             curl -fsSL "$REPO_TARBALL" | tar -xz -C "$tmpdir" --strip-components=1
