@@ -1,0 +1,24 @@
+# Compiled binaries
+pomodoro
+pomo
+pomodoro_tray_indicator
+tray_indicator
+
+# Build artifacts
+*.o
+*.obj
+build/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local runtime files (shouldn't be committed anyway)
+*.sock
+pomodoro_state.txt
