@@ -56,14 +56,12 @@ if [ "$OS" = "windows" ]; then
     printf '\n%s%sPomodoro Installer%s\n\n' "$BOLD" "$CYAN" "$RESET"
     warn "Native Windows detected."
     info "This bash script is designed for Linux and macOS."
-    info "To install on Windows, please download the pre-compiled .exe files"
-    info "from the GitHub Releases page:"
-    echo "  https://github.com/kaustubh-26/pomodoro/releases/latest"
     echo
-    info "Or, if you prefer to build from source, use CMake with Visual Studio:"
-    echo "  mkdir build && cd build"
-    echo "  cmake .."
-    echo "  cmake --build . --config Release"
+    info "To install on Windows, please open PowerShell and run:"
+    echo -e "  ${BOLD}powershell -c \"irm https://raw.githubusercontent.com/kaustubh-26/pomodoro/main/install.ps1 | iex\"${RESET}"
+    echo
+    info "Or download the pre-compiled .zip directly from:"
+    echo "  https://github.com/kaustubh-26/pomodoro/releases/latest"
     echo
     exit 0
 fi

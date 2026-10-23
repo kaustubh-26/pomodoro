@@ -8,10 +8,14 @@ PLATFORM="$(uname -ms)"
 case "$PLATFORM" in
     MINGW64*|MSYS_NT*|CYGWIN*)
         echo -e "\n${CYAN}==>${RESET} Native Windows detected."
-        echo -e "${RED}error:${RESET} This uninstaller is for Linux."
-        echo "To uninstall Pomodoro on Windows:"
+        echo -e "${RED}error:${RESET} This bash script is for Linux and macOS."
+        echo
+        echo "To uninstall Pomodoro on Windows, open PowerShell and run:"
+        echo "  powershell -c \"irm https://raw.githubusercontent.com/kaustubh-26/pomodoro/main/uninstall.ps1 | iex\""
+        echo
+        echo "Or, manually:"
         echo "  1. Open Task Manager and end any 'pomodoro.exe' processes."
-        echo "  2. Simply delete the folder where you extracted the .zip file."
+        echo "  2. Delete the folder '%LOCALAPPDATA%\\Programs\\Pomodoro'."
         echo
         exit 0
         ;;

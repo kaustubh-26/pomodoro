@@ -51,34 +51,52 @@ desktop notifications, session logging, and custom per-phase sounds.
 
 ## Install & Build
 
-### Linux
+### 🐧 macOS & Linux (One-liner)
 
-#### One-liner (recommended)
+To install Pomodoro, run the following command in your terminal:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kaustubh-26/pomodoro/main/install.sh | bash
 ```
 
-The script detects your distro, offers to install build dependencies,
-downloads the source, builds it, and installs the binaries to `~/.local/bin`.
+The script detects your distro, offers to install build dependencies (GTK 3, AppIndicator, etc.), downloads the source, builds it, and installs the binaries to ~/.local/bin.
 
-#### From source
+### 🪟 Windows (One-liner)
+To install Pomodoro on Windows, open PowerShell (not Command Prompt) and run:
 
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/kaustubh-26/pomodoro/main/install.ps1 | iex"
+```
+
+(Note: If Windows Defender prompts you, click More info → Run anyway. This is a standard false positive for scripts that download and install software.)
+
+The script downloads the latest pre-compiled release, extracts it to %LOCALAPPDATA%\Programs\Pomodoro, and adds it to your system PATH.
+
+(Alternatively, you can download the pomodoro-windows-x86_64.zip file directly from the Releases page and extract it anywhere).
+
+### Build From source
+
+Prerequisites
+- CMake (3.15+)
+- Linux: g++, libgtk-3-dev, libappindicator3-dev
+- Windows: Visual Studio C++ Build Tools or MinGW-w64
+
+
+#### Using CMake (Recommended)
 ```bash
 git clone https://github.com/kaustubh-26/pomodoro.git
 cd pomodoro
-./install.sh
+mkdir build && cd build
+cmake ..
+cmake --build . --config Release
 ```
 
-Or build manually with `make`:
-
+#### Manual Linux Build
 ```bash
 make
 ```
 
-### Windows
-
-#### With MinGW-w64 (GCC):
+#### Manual Windows Build (MinGW-w64)
 
 ```bash
 g++ -std=c++20 -O2 -o pomodoro.exe src/pomodoro.cpp -lwinmm
@@ -86,7 +104,7 @@ g++ -std=c++20 -O2 -o pomo.exe src/pomo.cpp
 g++ -std=c++20 -O2 -mwindows -o pomodoro_tray_indicator.exe src/pomodoro_tray_indicator.cpp -lshell32
 ```
 
-#### With MSVC (Developer Command Prompt):
+#### Manual Windows Build (MSVC Developer Command Prompt)
 
 ```cmd
 cl /std:c++20 /O2 /EHsc src/pomodoro.cpp winmm.lib
@@ -145,16 +163,33 @@ log         = true
 Bundled sounds live alongside the binaries in a `sounds/` directory.
 To change them, drop your own WAV files into that directory or set absolute paths in the config file.
 
-## Uninstall (Linux)
+## Uninstall
+
+### 🐧 Linux & macOS
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kaustubh-26/pomodoro/main/uninstall.sh | bash
 ```
 
-Or, from a cloned repo:
+#### From a cloned repo:
 
 ```bash
 ./uninstall.sh
+```
+
+### 🪟 Windows
+
+Open PowerShell (not Command Prompt) and run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/kaustubh-26/pomodoro/main/uninstall.ps1 | iex"
+```
+
+#### From a cloned repo:
+Open PowerShell, navigate to the repo folder, and bypass the execution policy for this specific script:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\uninstall.ps1
 ```
 
 ## License
