@@ -1,11 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+GREEN=$'\033[32m'; CYAN=$'\033[36m'; RED=$'\033[31m'; RESET=$'\033[0m'
+
+# ---- Platform detection ----------------------------------------------------
+PLATFORM="$(uname -ms)"
+case "$PLATFORM" in
+    MINGW64*|MSYS_NT*|CYGWIN*)
+        echo -e "\n${CYAN}==>${RESET} Native Windows detected."
+        echo -e "${RED}error:${RESET} This uninstaller is for Linux."
+        echo "To uninstall Pomodoro on Windows:"
+        echo "  1. Open Task Manager and end any 'pomodoro.exe' processes."
+        echo "  2. Simply delete the folder where you extracted the .zip file."
+        echo
+        exit 0
+        ;;
+esac
+
+# ----------------------------------------------------------------------------
+
 PREFIX="${PREFIX:-$HOME/.local}"
 LIBDIR="$PREFIX/lib/pomodoro"
 BINDIR="$PREFIX/bin"
-
-GREEN=$'\033[32m'; CYAN=$'\033[36m'; RESET=$'\033[0m'
 
 echo "${CYAN}==>${RESET} Stopping any running instances"
 pkill -f 'pomodoro --daemon' 2>/dev/null || true
@@ -24,7 +40,13 @@ rm -f "${XDG_RUNTIME_DIR:-/tmp}/pomodoro.sock" \
       "${XDG_RUNTIME_DIR:-/tmp}/pomodoro_state.txt"
 
 echo
-read -r -p "Also remove config and session logs? [y/N] " ans < /dev/tty
+# Only prompt if we have a TTY (prevents hanging in CI/CD)
+if [ -t 0 ]; then
+    read -r -p "Also remove config and session logs? [y/N] " ans < /dev/tty
+else
+    ans="n"
+fi
+
 case "$ans" in
     [yY]|[yY][eE][sS])
         rm -rf "$HOME/.config/pomodoro" "$HOME/.local/share/pomodoro"

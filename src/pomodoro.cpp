@@ -23,21 +23,13 @@
 #include <iomanip>
 #include <iostream>
 #include <optional>
-#include <poll.h>
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <termios.h>
 #include <thread>
 #include <vector>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <sys/un.h>
-#include <sys/prctl.h>
-#include <sys/wait.h>
+#include "platform.h"
+#include <shellapi.h>
 
 // ============================================================================
 //  ANSI helpers
@@ -134,7 +126,7 @@ namespace tmutil
     {
         const std::time_t t = std::time(nullptr);
         std::tm tmv{};
-        localtime_r(&t, &tmv);
+        platform::localtime_safe(&t, &tmv);
         char buf[16];
         std::strftime(buf, sizeof(buf), "%Y-%m-%d", &tmv);
         return buf;
@@ -144,7 +136,7 @@ namespace tmutil
     {
         const std::time_t t = std::time(nullptr);
         std::tm tmv{};
-        localtime_r(&t, &tmv);
+        platform::localtime_safe(&t, &tmv);
         char buf[32];
         std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tmv);
         return buf;
@@ -174,75 +166,16 @@ namespace tmutil
 } // namespace tmutil
 
 // ============================================================================
-//  Paths
+//  Executable-relative paths
 // ============================================================================
-namespace paths
-{
-
-    std::filesystem::path config_dir()
-    {
-        if (const char *x = std::getenv("XDG_CONFIG_HOME"); x && *x)
-            return std::filesystem::path(x) / "pomodoro";
-        const char *home = std::getenv("HOME");
-        return std::filesystem::path(home ? home : ".") / ".config" / "pomodoro";
-    }
-
-    std::filesystem::path data_dir()
-    {
-        if (const char *x = std::getenv("XDG_DATA_HOME"); x && *x)
-            return std::filesystem::path(x) / "pomodoro";
-        const char *home = std::getenv("HOME");
-        return std::filesystem::path(home ? home : ".") / ".local" / "share" / "pomodoro";
-    }
-
-    std::filesystem::path config_file() { return config_dir() / "config"; }
-    std::filesystem::path log_file() { return data_dir() / "sessions.csv"; }
-
-    inline std::filesystem::path runtime_dir()
-    {
-        if (const char *rt = std::getenv("XDG_RUNTIME_DIR"); rt && *rt)
-            return rt;
-        return "/tmp";
-    }
-
-    inline std::filesystem::path state_file() { return runtime_dir() / "pomodoro_state.txt"; }
-    inline std::filesystem::path socket_file() { return runtime_dir() / "pomodoro.sock"; }
-
-} // namespace paths
-
-// ============================================================================
-//  Executable-relative paths (so sounds ship alongside the binary)
-// ============================================================================
-static std::filesystem::path exe_dir() {
-    std::error_code ec;
-    auto p = std::filesystem::read_symlink("/proc/self/exe", ec);
-    if (ec || p.empty())
-        return std::filesystem::current_path();
-    return p.parent_path();
-}
-
 static std::filesystem::path bundled_sound(const std::string& name) {
-    return exe_dir() / "sounds" / name;
+    return platform::get_exe_dir() / "sounds" / name;
 }
 
 // ============================================================================
 //  Is a pomodoro daemon already running?
 // ============================================================================
-static bool daemon_is_running() {
-    const auto sp = paths::socket_file();
-    if (!std::filesystem::exists(sp)) return false;
-
-    const int s = ::socket(AF_UNIX, SOCK_STREAM, 0);
-    if (s < 0) return false;
-
-    sockaddr_un addr{};
-    addr.sun_family = AF_UNIX;
-    std::snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", sp.c_str());
-
-    const bool ok = (::connect(s, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
-    ::close(s);
-    return ok;
-}
+// Handled by platform::daemon_is_running()
 
 // ============================================================================
 //  Configuration
@@ -352,155 +285,39 @@ struct Config
 };
 
 // ============================================================================
-//  Terminal guard: raw mode + hidden cursor
-// ============================================================================
-class TerminalGuard
-{
-public:
-    TerminalGuard()
-    {
-        if (::isatty(STDIN_FILENO) && ::tcgetattr(STDIN_FILENO, &old_) == 0)
-        {
-            termios raw = old_;
-            raw.c_lflag &= ~static_cast<tcflag_t>(ICANON | ECHO);
-            raw.c_cc[VMIN] = 0;
-            raw.c_cc[VTIME] = 0;
-            if (::tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == 0)
-                active_ = true;
-        }
-        std::cout << ansi::hide_cursor << std::flush;
-    }
-
-    ~TerminalGuard()
-    {
-        if (active_)
-            ::tcsetattr(STDIN_FILENO, TCSAFLUSH, &old_);
-        std::cout << ansi::show_cursor << ansi::reset << std::flush;
-    }
-
-    TerminalGuard(const TerminalGuard &) = delete;
-    TerminalGuard &operator=(const TerminalGuard &) = delete;
-
-private:
-    termios old_{};
-    bool active_ = false;
-};
-
-// ============================================================================
-//  Daemonize: detach from terminal, become a background process
-// ============================================================================
-static bool daemonize()
-{
-    pid_t pid = ::fork();
-    if (pid < 0)
-        return false;
-    if (pid > 0)
-        std::exit(0); // parent exits
-    if (::setsid() < 0)
-        return false;
-
-    std::signal(SIGHUP, SIG_IGN);
-
-    pid = ::fork();
-    if (pid < 0)
-        return false;
-    if (pid > 0)
-        std::exit(0); // session leader exits
-
-    ::umask(0);
-    if (::chdir("/") < 0)
-        return false;
-
-    const int fd = ::open("/dev/null", O_RDWR);
-    if (fd < 0)
-        return false;
-    ::dup2(fd, STDIN_FILENO);
-    ::dup2(fd, STDOUT_FILENO);
-    ::dup2(fd, STDERR_FILENO);
-    if (fd > 2)
-        ::close(fd);
-    return true;
-}
-
-// ============================================================================
-//  Fork a foreground process into a real background daemon.
-//  Parent prints a farewell and exits; only the grandchild continues.
-// ============================================================================
-static bool fork_to_background()
-{
-    std::cout << std::flush;   // flush before forking so no output is duplicated
-
-    pid_t pid = ::fork();
-    if (pid < 0) return false;
-
-    if (pid > 0) {
-        // Parent: hand control back to the shell.
-        std::cout << "\n  " << ansi::bold << "Detached." << ansi::reset
-                  << " Pomodoro running in the background.\n"
-                  << "  Re-attach with: " << ansi::bold << "pomo" << ansi::reset
-                  << "\n\n" << std::flush;
-        std::exit(0);
-    }
-
-    // Child: new session, ignore SIGHUP, fork again to fully detach.
-    if (::setsid() < 0) return false;
-    std::signal(SIGHUP, SIG_IGN);
-
-    pid = ::fork();
-    if (pid < 0) return false;
-    if (pid > 0) std::exit(0);
-
-    ::umask(0);
-
-    // Redirect standard streams to /dev/null.
-    const int fd = ::open("/dev/null", O_RDWR);
-    if (fd < 0) return false;
-    ::dup2(fd, STDIN_FILENO);
-    ::dup2(fd, STDOUT_FILENO);
-    ::dup2(fd, STDERR_FILENO);
-    if (fd > 2) ::close(fd);
-
-    return true;   // only the daemon grandchild reaches here
-}
-
-// ============================================================================
 //  Tray indicator lifecycle: spawn as child, die when daemon dies
 // ============================================================================
 static pid_t g_tray_pid = -1;
 
 static void launch_tray_indicator() {
-    const auto tray_path = exe_dir() / "pomodoro_tray_indicator";
-    if (!std::filesystem::exists(tray_path)) return;
-
-    const pid_t pid = ::fork();
-    if (pid < 0) return;
-
-    if (pid == 0) {
-        // We're the child. Ask the kernel to send SIGTERM when parent dies.
-        const pid_t parent = ::getppid();
-        ::prctl(PR_SET_PDEATHSIG, SIGTERM);
-        if (::getppid() != parent) ::_exit(0);  // parent already gone
-
-        // Redirect output to /dev/null so we don't pollute the daemon's stdout.
-        const int devnull = ::open("/dev/null", O_WRONLY);
-        if (devnull >= 0) {
-            ::dup2(devnull, STDOUT_FILENO);
-            ::dup2(devnull, STDERR_FILENO);
-            if (devnull > 2) ::close(devnull);
-        }
-
-        ::execl(tray_path.c_str(), tray_path.c_str(), nullptr);
-        ::_exit(127);  // exec failed
+    std::filesystem::path tray_path = platform::get_exe_dir() / "pomodoro_tray_indicator";
+#ifdef _WIN32
+    tray_path += ".exe";
+    if (std::filesystem::exists(tray_path)) {
+        ShellExecuteA(NULL, "open", tray_path.string().c_str(), NULL, NULL, SW_HIDE);
     }
-
-    g_tray_pid = pid;
+#else
+    if (std::filesystem::exists(tray_path)) {
+        pid_t pid = ::fork();
+        if (pid == 0) {
+            ::prctl(PR_SET_PDEATHSIG, SIGTERM);
+            ::execl(tray_path.c_str(), tray_path.c_str(), nullptr);
+            ::_exit(127);
+        }
+        g_tray_pid = pid;
+    }
+#endif
 }
 
 static void stop_tray_indicator() {
+#ifdef _WIN32
+    // Handled by OS when daemon exits
+#else
     if (g_tray_pid <= 0) return;
     ::kill(g_tray_pid, SIGTERM);
     ::waitpid(g_tray_pid, nullptr, 0);
     g_tray_pid = -1;
+#endif
 }
 
 // ============================================================================
@@ -519,7 +336,7 @@ public:
     explicit App(Config cfg) : cfg_(std::move(cfg))
     {
         cfg_.sanitize();
-        log_path_ = paths::log_file();
+        log_path_ = platform::log_file();
     }
 
     void set_daemon(bool d) { daemon_ = d; }
@@ -527,14 +344,16 @@ public:
     int run() {
         std::signal(SIGINT,  on_signal);
         std::signal(SIGTERM, on_signal);
+    #ifndef _WIN32
         std::signal(SIGPIPE, SIG_IGN);
+    #endif
 
         today_focus_ = load_today_focus();
         set_phase(Phase::Work);
 
         // ---------- Mode 1: --daemon ----------
         if (daemon_) {
-            if (!setup_daemon_socket()) return 1;
+            if (!server_.init()) return 1; // <-- NEW
             launch_tray_indicator();
             const int rc = run_daemon_loop();
             stop_tray_indicator();
@@ -542,7 +361,7 @@ public:
         }
 
         // ---------- Mode 2: foreground UI + tray ----------
-        if (!setup_daemon_socket()) {
+        if (!server_.init()) { // <-- NEW
             std::cerr << "Failed to set up socket.\n";
             return 1;
         }
@@ -554,10 +373,8 @@ public:
         if (exit_mode_ == ExitMode::Detach) {
             // Clean up the current tray and socket before forking.
             stop_tray_indicator();
-            if (listen_sock_ >= 0) { ::close(listen_sock_); listen_sock_ = -1; }
-            ::unlink(paths::socket_file().c_str());
-
-            if (!fork_to_background()) {
+            server_.cleanup(); // <-- NEW
+            if (!platform::fork_to_background()) { // <-- NEW
                 std::cerr << "Failed to detach.\n";
                 return 1;
             }
@@ -567,7 +384,7 @@ public:
             running_    = true;
             exit_mode_  = ExitMode::None;
 
-            if (!setup_daemon_socket()) return 1;
+            if (!server_.init()) return 1;
             launch_tray_indicator();
             const int rc = run_daemon_loop();
             stop_tray_indicator();
@@ -593,10 +410,10 @@ private:
     bool paused_ = false;
     bool running_ = true;
     bool daemon_ = false;
-    int listen_sock_ = -1;
     enum class ExitMode { None, Detach, Kill };
     ExitMode exit_mode_ = ExitMode::None;
 
+    platform::IPCServer server_;
     int cycle_count_ = 0; // completed work sessions (for long-break cadence)
     int run_focus_ = 0;   // completed work sessions this run
 
@@ -756,26 +573,6 @@ private:
     }
 
     // ---- input -------------------------------------------------------------
-    void poll_input()
-    {
-        for (;;)
-        {
-            pollfd pfd{STDIN_FILENO, POLLIN, 0};
-            const int r = ::poll(&pfd, 1, 0);
-            if (r <= 0 || !(pfd.revents & POLLIN))
-                return;
-
-            char c = 0;
-            const ssize_t n = ::read(STDIN_FILENO, &c, 1);
-            if (n <= 0)
-                return;
-
-            handle_key(c);
-            if (!running_)
-                return;
-        }
-    }
-
     void handle_key(char c)
     {
         switch (c)
@@ -818,20 +615,14 @@ private:
     }
 
     // ---- notifications & logging ------------------------------------------
-    void notify(std::string_view summary, std::string_view body) const
-    {
-        if (!cfg_.notify)
-            return;
-        const std::string cmd = cfg_.notify_cmd + " -a Pomodoro -t 6000 " + str::shell_quote(summary) + " " + str::shell_quote(body) + " >/dev/null 2>&1 &";
-        if (std::system(cmd.c_str()) != 0)
-        { /* ignore */
-        }
+    void notify(std::string_view summary, std::string_view body) const {
+        if (!cfg_.notify) return;
+        platform::notify(std::string(summary), std::string(body));
     }
 
     void play_sound(const std::string& path) const {
         if (path.empty()) return;
-        const std::string cmd = "paplay " + str::shell_quote(path) + " >/dev/null 2>&1 &";
-        if (std::system(cmd.c_str()) != 0) { /* ignore */ }
+        platform::play_sound(path);
     }
 
     void log_phase(Phase p, std::chrono::milliseconds elapsed, bool completed) const
@@ -889,7 +680,7 @@ private:
 
     // ---- state file for tray_indicator ------------------------------------
     void write_state_file() const {
-        std::ofstream f(paths::state_file(), std::ios::trunc);
+        std::ofstream f(platform::state_file(), std::ios::trunc);
         if (!f) return;
 
         const long long rem_secs =
@@ -906,7 +697,7 @@ private:
 
         // ---- interactive (foreground) mode ------------------------------------
     int run_interactive_loop() {
-        TerminalGuard guard;
+        platform::RawTerminal guard;
         auto last = Clock::now();
 
         while (running_ && !g_stop) {
@@ -922,10 +713,26 @@ private:
                 }
             }
 
-            poll_input();
+            if (platform::wait_for_input(0)) {
+                handle_key(platform::read_char());
+            }
             render();
             write_state_file();
-            handle_socket_commands();
+            
+            // Read socket commands
+            std::string cmd = server_.poll_command();
+            if (!cmd.empty()) {
+                while (!cmd.empty() && (cmd.back() == '\n' || cmd.back() == '\r')) cmd.pop_back();
+                if (cmd == "pause") paused_ = true;
+                else if (cmd == "resume") paused_ = false;
+                else if (cmd == "toggle") paused_ = !paused_;
+                else if (cmd == "skip") skip_phase();
+                else if (cmd == "reset") reset_phase();
+                else if (cmd == "adjust+60") adjust(std::chrono::seconds(60));
+                else if (cmd == "adjust-60") adjust(std::chrono::seconds(-60));
+                else if (cmd == "quit") running_ = false;
+            }
+            
             std::this_thread::sleep_for(std::chrono::milliseconds(40));
         }
 
@@ -936,30 +743,7 @@ private:
     }
 
     // ---- daemon (background) mode -----------------------------------------
-    bool setup_daemon_socket() {
-        const auto sp = paths::socket_file();
-        ::unlink(sp.c_str());
-
-        listen_sock_ = ::socket(AF_UNIX, SOCK_STREAM, 0);
-        if (listen_sock_ < 0) return false;
-
-        sockaddr_un addr{};
-        addr.sun_family = AF_UNIX;
-        std::snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", sp.c_str());
-
-        if (::bind(listen_sock_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
-            ::close(listen_sock_); listen_sock_ = -1; return false;
-        }
-        if (::listen(listen_sock_, 4) < 0) {
-            ::close(listen_sock_); listen_sock_ = -1; return false;
-        }
-
-        // Set listening socket non-blocking ONCE so accept() never hangs.
-        const int flags = ::fcntl(listen_sock_, F_GETFL, 0);
-        ::fcntl(listen_sock_, F_SETFL, flags | O_NONBLOCK);
-        return true;
-    }
-    
+  
     int run_daemon_loop() {
         auto last = Clock::now();
 
@@ -977,55 +761,26 @@ private:
             }
 
             write_state_file();
-            handle_socket_commands();
+            
+            // Read socket commands
+            std::string cmd = server_.poll_command();
+            if (!cmd.empty()) {
+                while (!cmd.empty() && (cmd.back() == '\n' || cmd.back() == '\r')) cmd.pop_back();
+                if (cmd == "pause") paused_ = true;
+                else if (cmd == "resume") paused_ = false;
+                else if (cmd == "toggle") paused_ = !paused_;
+                else if (cmd == "skip") skip_phase();
+                else if (cmd == "reset") reset_phase();
+                else if (cmd == "adjust+60") adjust(std::chrono::seconds(60));
+                else if (cmd == "adjust-60") adjust(std::chrono::seconds(-60));
+                else if (cmd == "quit") running_ = false;
+            }
 
             std::this_thread::sleep_for(std::chrono::milliseconds(40));
         }
 
-        if (listen_sock_ >= 0) ::close(listen_sock_);
-        ::unlink(paths::socket_file().c_str());
+        server_.cleanup();
         return 0;
-    }
-
-    void handle_socket_commands() {
-        if (listen_sock_ < 0) return;
-
-        // 1. Only try to accept if a client is actually waiting.
-        pollfd lp{listen_sock_, POLLIN, 0};
-        if (::poll(&lp, 1, 0) <= 0) return;
-        if (!(lp.revents & POLLIN)) return;
-
-        const int client = ::accept(listen_sock_, nullptr, nullptr);
-        if (client < 0) return;
-
-        // 2. Wait up to 100 ms for the client to send its command.
-        //    This avoids blocking forever if the client connects but is slow to write.
-        pollfd cp{client, POLLIN, 0};
-        if (::poll(&cp, 1, 100) <= 0 || !(cp.revents & POLLIN)) {
-            ::close(client);
-            return;
-        }
-
-        char buf[64] = {};
-        const ssize_t n = ::read(client, buf, sizeof(buf) - 1);
-        if (n <= 0) { ::close(client); return; }
-
-        std::string cmd(buf, static_cast<std::size_t>(n));
-        while (!cmd.empty() && (cmd.back() == '\n' || cmd.back() == '\r'))
-            cmd.pop_back();
-
-        if      (cmd == "pause")        paused_ = true;
-        else if (cmd == "resume")       paused_ = false;
-        else if (cmd == "toggle")       paused_ = !paused_;
-        else if (cmd == "skip")         skip_phase();
-        else if (cmd == "reset")        reset_phase();
-        else if (cmd == "adjust+60")    adjust(std::chrono::seconds(60));
-        else if (cmd == "adjust-60")    adjust(std::chrono::seconds(-60));
-        else if (cmd == "quit")         running_ = false;
-        else if (cmd == "status")       { /* fall through to reply */ }
-
-        // No reply — the client reads state from the state file.
-        ::close(client);
     }
 
     // ---- rendering ---------------------------------------------------------
@@ -1178,8 +933,8 @@ static void print_help(const char *argv0)
         << "  r           restart the current phase\n"
         << "  + / -       add or remove one minute\n"
         << "  q / Ctrl-C  quit\n\n"
-        << "Config file : " << paths::config_file().string() << "\n"
-        << "Session log : " << paths::log_file().string() << "\n";
+        << "Config file : " << platform::config_file().string() << "\n"
+        << "Session log : " << platform::log_file().string() << "\n";
 }
 
 static std::optional<int> int_value(std::string_view arg)
@@ -1200,7 +955,7 @@ static std::optional<int> int_value(std::string_view arg)
 int main(int argc, char **argv)
 {
     bool daemon_mode = false;
-    const auto cfg_path = paths::config_file();
+    const auto cfg_path = platform::config_file();
     if (!std::filesystem::exists(cfg_path))
         Config::write_default(cfg_path);
 
@@ -1261,7 +1016,7 @@ int main(int argc, char **argv)
 
     cfg.sanitize();
 
-    if (daemon_is_running()) {
+    if (platform::daemon_is_running()) {
         std::cerr << "\n  A pomodoro daemon is already running.\n"
                   << "  Attach with:  pomo\n"
                   << "  Stop it with: pomo  (then press Q)\n\n";
@@ -1269,7 +1024,7 @@ int main(int argc, char **argv)
     }
 
     if (daemon_mode) {
-        if (!daemonize()) {
+        if (!platform::daemonize()) {
             std::cerr << "Failed to daemonize.\n";
             return 1;
         }

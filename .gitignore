@@ -8,6 +8,10 @@ tray_indicator
 *.o
 *.obj
 build/
+build-win/
+
+dist*/
+*.zip
 
 # Editor
 .vscode/

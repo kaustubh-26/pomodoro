@@ -38,6 +38,10 @@ case "$PLATFORM" in
     'Linux aarch64'|'Linux arm64') OS=linux; ARCH=aarch64 ;;
     'Darwin x86_64') OS=macos;  ARCH=x86_64 ;;
     'Darwin arm64')  OS=macos;  ARCH=aarch64 ;;
+    MINGW64*|MSYS_NT*|CYGWIN*)
+        OS=windows
+        ARCH=x86_64
+        ;;
     *) die "Unsupported platform: $PLATFORM" ;;
 esac
 
@@ -45,6 +49,23 @@ esac
 if grep -qi microsoft /proc/version 2>/dev/null; then
     OS=wsl
     warn "Detected WSL — will treat as Linux"
+fi
+
+# Handle native Windows
+if [ "$OS" = "windows" ]; then
+    printf '\n%s%sPomodoro Installer%s\n\n' "$BOLD" "$CYAN" "$RESET"
+    warn "Native Windows detected."
+    info "This bash script is designed for Linux and macOS."
+    info "To install on Windows, please download the pre-compiled .exe files"
+    info "from the GitHub Releases page:"
+    echo "  https://github.com/kaustubh-26/pomodoro/releases/latest"
+    echo
+    info "Or, if you prefer to build from source, use CMake with Visual Studio:"
+    echo "  mkdir build && cd build"
+    echo "  cmake .."
+    echo "  cmake --build . --config Release"
+    echo
+    exit 0
 fi
 
 # ---- Dependency checks -----------------------------------------------------
